@@ -3,8 +3,6 @@ package rpc2d
 
 import (
 	"bufio"
-	//"errors"
-	//"bufio"
 	"bytes"
 	"encoding/binary"
 	"io"
