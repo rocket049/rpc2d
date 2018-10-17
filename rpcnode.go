@@ -63,23 +63,22 @@ func (self *RpcNode) wrapSend(t byte, msg []byte, conn io.Writer) (nbytes int, e
 	//h1[0] = t
 	//binary.BigEndian.PutUint16(h1[1:2], 65535)
 	bufconn := bufio.NewWriter(conn)
+	b := newBuffer()
 	for i := 0; i < n; i++ {
 		//send
 		p := msg[i*65535 : i*65535+65535]
-		b := newBuffer()
+		b.Reset()
 		b.Write(h1[:])
 		b.Write(p)
 		_, e := bufconn.Write(b.Bytes())
 		if e != nil {
 			return 0, e
 		}
-		bufPool.Put(b)
 	}
 	if m > 0 {
 		//send
 		binary.BigEndian.PutUint16(h1[1:3], m)
 		p := msg[n*65535 : n*65535+int(m)]
-		b := newBuffer()
 		b.Reset()
 		b.Write(h1[:])
 		b.Write(p)
@@ -88,8 +87,8 @@ func (self *RpcNode) wrapSend(t byte, msg []byte, conn io.Writer) (nbytes int, e
 			return 0, e
 		}
 		//log.Printf("length:%d  split:%d  last:%d\nfrom %c:%v\n", len1, n, m, t, b.Bytes())
-		bufPool.Put(b)
 	}
+	bufPool.Put(b)
 	err := bufconn.Flush()
 	if err != nil {
 		log.Printf("WrapSend:%v\n", err)
