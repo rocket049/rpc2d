@@ -3,6 +3,8 @@
 #### 项目介绍
 rpc2d 双向 RPC 调用，可以实现从服务器 CALLBACK 客户端 API，基于 "net/rpc" 原生库
 
+use: SEE `test/server.go` 、 `test/client.go`
+
 #### 软件架构
 软件架构说明
 
@@ -15,9 +17,12 @@ rpc2d 双向 RPC 调用，可以实现从服务器 CALLBACK 客户端 API，基�
 
 #### 使用说明
 
-1. xxxx
-2. xxxx
-3. xxxx
+    type ProviderType
+    type RpcNode
+        func Accept(l net.Listener, provider interface{}) (*RpcNode, error)
+        func NewRpcNode(provider interface{}) *RpcNode
+        func (self *RpcNode) Close()
+        func (self *RpcNode) Dial(addr string) error
 
 #### 参与贡献
 
