@@ -30,7 +30,7 @@ func newBuffer() *bytes.Buffer {
 	return bufPool.Get().(*bytes.Buffer)
 }
 
-//Provider Type is NOT must fit this. But this struct can help CALLBACK. See test server.go/client.go
+//ProviderType This is NOT must fit below struct. But this struct can help CALLBACK. See test server.go/client.go
 type ProviderType struct {
 	Client *rpc.Client
 	Data   interface{}
