@@ -134,9 +134,10 @@ func (self *RpcNode) proxyLoop(conn net.Conn) {
 }
 
 func (self *RpcNode) remoteToLocal() {
+	var bufremote = bufio.NewReader(self.remote)
 LOOP1:
 	for {
-		msg, t := self.wrapRecv(self.remote)
+		msg, t := self.wrapRecv(bufremote)
 		switch t {
 		case S:
 			self.connC2.Write(msg)
