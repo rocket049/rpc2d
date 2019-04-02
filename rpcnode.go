@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/rpc"
 	"sync"
+	"time"
 )
 
 //wrap message( []byte ): "T uint8 + length uint16 + bytes [length]byte".  T = S/C/E
@@ -17,6 +18,7 @@ const (
 	S = byte('S') //Flag : Server Message
 	C = byte('C') //Flag : Client Message
 	E = byte('E') //Flag : Error
+	T = byte('T') //Flag : Timeout
 )
 
 //Pool: bytes.Buffer, use : bufPool.Get().(*bytes.Buffer)
@@ -102,13 +104,29 @@ func (self *RpcNode) wrapSend(t byte, msg []byte, conn io.Writer) (nbytes int, e
 func (self *RpcNode) wrapRecv(conn io.Reader) (msg []byte, t byte) {
 	//bufconn := bufio.NewReader(conn)
 	var h1 [3]byte
-	n, _ := io.ReadFull(conn, h1[:])
+	n, err := io.ReadFull(conn, h1[:])
+	if err != nil {
+		err1, ok := err.(*net.OpError)
+		if !ok {
+			return nil, E
+		} else if err1.Timeout() {
+			return nil, T
+		}
+	}
 	if n != 3 {
 		return nil, E
 	}
 	length := binary.BigEndian.Uint16(h1[1:])
 	buf1 := make([]byte, int(length))
-	n, _ = io.ReadFull(conn, buf1)
+	n, err = io.ReadFull(conn, buf1)
+	if err != nil {
+		err1, ok := err.(*net.OpError)
+		if !ok {
+			return nil, E
+		} else if err1.Timeout() {
+			return nil, T
+		}
+	}
 	if n == int(length) {
 		return buf1, h1[0]
 	} else {
@@ -137,6 +155,7 @@ func (self *RpcNode) remoteToLocal() {
 	var bufremote = bufio.NewReader(self.remote)
 LOOP1:
 	for {
+		self.remote.SetDeadline(time.Now().Add(time.Second * 90))
 		msg, t := self.wrapRecv(bufremote)
 		switch t {
 		case S:
@@ -147,6 +166,8 @@ LOOP1:
 			//log.Printf("to S:%v\n", msg)
 		case E:
 			break LOOP1
+		case T:
+			log.Println("timeout")
 		}
 	}
 	self.remote.Close()
