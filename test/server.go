@@ -8,16 +8,16 @@ import (
 	"gitee.com/rocket049/rpc2d"
 )
 
-type My rpc2d.ProviderType
+type Server rpc2d.ProviderType
 
 var count = 0
 
-func (self *My) Show(arg string, reply *int) error {
+func (self *Server) Show(arg string, reply *int) error {
 	fmt.Printf("Recv: %s, count: %d\n", arg, count)
 	*reply = count
 	count++
 	var ret int
-	self.Client.Call("My.Show", "this is callback.", &ret)
+	self.Client.Call("Client.Show", fmt.Sprintf("callback:%s.", arg), &ret)
 	return nil
 }
 
@@ -27,7 +27,7 @@ func main() {
 		log.Fatal("Listen:", err)
 	}
 	defer l.Close()
-	p := new(My)
+	p := new(Server)
 	node1, err := rpc2d.Accept(l, p)
 	if err != nil {
 		log.Fatal("Accept:", err)
@@ -37,8 +37,10 @@ func main() {
 	var s string
 	var ret int
 	for i := 0; i < 5; i++ {
-		fmt.Scanln(&s)
-		node1.Client.Call("My.Show", s, &ret)
+		s = fmt.Sprintf("server message %d\n", i)
+		node1.Client.Call("Client.Show", s, &ret)
 		fmt.Printf("Return:%d\n", ret)
 	}
+
+	select {}
 }
