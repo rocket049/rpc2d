@@ -21,7 +21,10 @@ func (self *Client) Show(arg string, reply *int) error {
 
 func BenchmarkClient(b *testing.B) {
 	b.Log("start benchmark")
-	testProc(b.N)
+	err := testProc(b.N)
+	if err != nil {
+		b.Fatal(err)
+	}
 }
 
 func TestClient(t *testing.T) {
