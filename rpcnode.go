@@ -209,6 +209,7 @@ func (self *RpcNode) Close() {
 	self.connC1.Close()
 	self.connS2.Close()
 	self.connS1.Close()
+	self.remote.Close()
 }
 
 //Accept accept remote connection,and link local server/client
