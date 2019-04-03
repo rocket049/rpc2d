@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"log"
 	"net"
 	"net/rpc"
 	"sync"
@@ -93,7 +92,7 @@ func (self *RpcNode) wrapSend(t byte, msg []byte, conn io.Writer) (nbytes int, e
 	bufPool.Put(b)
 	err := bufconn.Flush()
 	if err != nil {
-		log.Printf("WrapSend:%v\n", err)
+		//log.Printf("WrapSend:%v\n", err)
 		return 0, err
 	} else {
 		return len1, nil
@@ -167,30 +166,30 @@ LOOP1:
 		case E:
 			break LOOP1
 		case T:
-			log.Println("timeout")
+			//log.Println("timeout")
 		}
 	}
 	self.remote.Close()
-	log.Println("remote disconnect")
+	//log.Println("remote disconnect")
 }
 
 func (self *RpcNode) localToRemote(from io.ReadCloser, t byte) {
 	var buf = make([]byte, 512)
 	for {
-		n, err := from.Read(buf)
+		n, _ := from.Read(buf)
 		if n > 0 {
 			_, err := self.wrapSend(t, buf[:n], self.remote)
 			if err != nil {
-				log.Printf("WrapSend:%v\n", err)
+				//log.Printf("WrapSend:%v\n", err)
 				break
 			}
 		} else {
-			log.Printf("local Read:%v\n", err)
+			//log.Printf("local Read:%v\n", err)
 			break
 		}
 	}
 	from.Close()
-	log.Printf("local disconnect: %c\n", t)
+	//log.Printf("local disconnect: %c\n", t)
 }
 
 //Dial connect to remote, and link local server/client,use after NewRpcNode
