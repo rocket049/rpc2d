@@ -21,6 +21,7 @@ use: SEE `test/server.go` 、 `test/client.go`
     type RpcNode
         func Accept(l net.Listener, provider interface{}) (*RpcNode, error)
         func NewRpcNode(provider interface{}) *RpcNode
+        func NewRpcNodeByConn(provider interface{}, conn io.ReadWriteCloser) *RpcNode
         func (self *RpcNode) Close()
         func (self *RpcNode) Dial(addr string) error
 
