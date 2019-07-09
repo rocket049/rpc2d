@@ -5,6 +5,8 @@ rpc2d 双向 RPC 调用，可以实现从服务器 CALLBACK 客户端 API，基�
 
 use: SEE `test/server.go` 、 `test/client.go`
 
+*`NewRpcNodeByConn` 函数兼容 `gitee.com/rocket049/pipeconn`*
+
 #### 软件架构
 软件架构说明
 
