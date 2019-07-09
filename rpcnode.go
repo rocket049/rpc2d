@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/rpc"
 	"sync"
-	"time"
 )
 
 //wrap message( []byte ): "T uint8 + length uint16 + bytes [length]byte".  T = S/C/E
@@ -43,7 +42,7 @@ type RpcNode struct {
 	Client         *rpc.Client
 	connC1, connC2 net.Conn
 	connS1, connS2 net.Conn
-	remote         net.Conn
+	remote         io.ReadWriteCloser
 }
 
 //NewRpcNode create new Rpc.Node ,init rpc.Server with service provider
@@ -134,7 +133,7 @@ func (self *RpcNode) wrapRecv(conn io.Reader) (msg []byte, t byte) {
 }
 
 //proxyLoop proxy between remote and local server/client,redirect/wrapsend messages
-func (self *RpcNode) proxyLoop(conn net.Conn) {
+func (self *RpcNode) proxyLoop(conn io.ReadWriteCloser) {
 	self.connS1, self.connS2 = net.Pipe()
 	self.connC1, self.connC2 = net.Pipe()
 	//self.Server = rpc.NewServer()
@@ -154,7 +153,7 @@ func (self *RpcNode) remoteToLocal() {
 	var bufremote = bufio.NewReader(self.remote)
 LOOP1:
 	for {
-		self.remote.SetDeadline(time.Now().Add(time.Second * 90))
+		//self.remote.SetDeadline(time.Now().Add(time.Second * 90))
 		msg, t := self.wrapRecv(bufremote)
 		switch t {
 		case S:
@@ -221,4 +220,11 @@ func Accept(l net.Listener, provider interface{}) (*RpcNode, error) {
 	node1 := NewRpcNode(provider)
 	node1.proxyLoop(conn)
 	return node1, nil
+}
+
+//NewRpcNodeByConn connect to remote by io.ReadWriteCloser, and link local server/client,use after NewRpcNode
+func NewRpcNodeByConn(provider interface{}, conn io.ReadWriteCloser) *RpcNode {
+	node1 := NewRpcNode(provider)
+	node1.proxyLoop(conn)
+	return node1
 }
