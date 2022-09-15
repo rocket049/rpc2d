@@ -1,22 +1,29 @@
-//rpc2d 双向 RPC 调用，可以实现从服务器 CALLBACK 客户端 API，基于 "net/rpc" 原生库
 package rpc2d
 
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"io"
+	"log"
 	"net"
+	"net/http"
 	"net/rpc"
+	"net/rpc/jsonrpc"
 	"sync"
+	"time"
 )
+
+// Can connect to RPC service using HTTP CONNECT to rpcPath.
+var connected = "200 Connected to TOPVAS Go RPC"
 
 //wrap message( []byte ): "T uint8 + length uint16 + bytes [length]byte".  T = S/C/E
 const (
 	S = byte('S') //Flag : Server Message
 	C = byte('C') //Flag : Client Message
 	E = byte('E') //Flag : Error
-	T = byte('T') //Flag : Timeout
 )
 
 //Pool: bytes.Buffer, use : bufPool.Get().(*bytes.Buffer)
@@ -30,26 +37,22 @@ func newBuffer() *bytes.Buffer {
 	return bufPool.Get().(*bytes.Buffer)
 }
 
-//ProviderType This is NOT must fit below struct. But this struct can help CALLBACK. See test server.go/client.go
-type ProviderType struct {
-	Client *rpc.Client
-	Data   interface{}
-}
-
 //RpcNode double direction RPC
 type RpcNode struct {
 	Server         *rpc.Server
 	Client         *rpc.Client
 	connC1, connC2 net.Conn
 	connS1, connS2 net.Conn
-	remote         io.ReadWriteCloser
+	remote         net.Conn
+	ErrFunc        []func(*RpcNode, error)
 }
 
 //NewRpcNode create new Rpc.Node ,init rpc.Server with service provider
-func NewRpcNode(provider interface{}) *RpcNode {
+func NewRpcNode(name string, rcvr any) *RpcNode {
 	res := new(RpcNode)
 	res.Server = rpc.NewServer()
-	res.Server.Register(provider)
+	res.Server.RegisterName(name, rcvr)
+
 	return res
 }
 
@@ -58,11 +61,8 @@ func (self *RpcNode) wrapSend(t byte, msg []byte, conn io.Writer) (nbytes int, e
 	len1 := len(msg)
 	n := len1 / 65535
 	m := uint16(len1 % 65535)
-	//log.Printf("length:%d  split:%d  last:%d\n", len1, n, m)
 	var h1 = [3]byte{t, 0xff, 0xff}
-	//h1[0] = t
-	//binary.BigEndian.PutUint16(h1[1:2], 65535)
-	bufconn := bufio.NewWriter(conn)
+	bufConn := bufio.NewWriter(conn)
 	b := newBuffer()
 	for i := 0; i < n; i++ {
 		//send
@@ -70,7 +70,7 @@ func (self *RpcNode) wrapSend(t byte, msg []byte, conn io.Writer) (nbytes int, e
 		b.Reset()
 		b.Write(h1[:])
 		b.Write(p)
-		_, e := bufconn.Write(b.Bytes())
+		_, e := bufConn.Write(b.Bytes())
 		if e != nil {
 			return 0, e
 		}
@@ -82,16 +82,15 @@ func (self *RpcNode) wrapSend(t byte, msg []byte, conn io.Writer) (nbytes int, e
 		b.Reset()
 		b.Write(h1[:])
 		b.Write(p)
-		_, e := bufconn.Write(b.Bytes())
+		_, e := bufConn.Write(b.Bytes())
 		if e != nil {
 			return 0, e
 		}
-		//log.Printf("length:%d  split:%d  last:%d\nfrom %c:%v\n", len1, n, m, t, b.Bytes())
 	}
 	bufPool.Put(b)
-	err := bufconn.Flush()
+	err := bufConn.Flush()
 	if err != nil {
-		//log.Printf("WrapSend:%v\n", err)
+		log.Printf("WrapSend:%v\n", err)
 		return 0, err
 	} else {
 		return len1, nil
@@ -100,31 +99,14 @@ func (self *RpcNode) wrapSend(t byte, msg []byte, conn io.Writer) (nbytes int, e
 
 //wrapRecv receive message from remote. Next: route to server or client
 func (self *RpcNode) wrapRecv(conn io.Reader) (msg []byte, t byte) {
-	//bufconn := bufio.NewReader(conn)
 	var h1 [3]byte
-	n, err := io.ReadFull(conn, h1[:])
-	if err != nil {
-		err1, ok := err.(*net.OpError)
-		if !ok {
-			return nil, E
-		} else if err1.Timeout() {
-			return nil, T
-		}
-	}
+	n, _ := io.ReadFull(conn, h1[:])
 	if n != 3 {
 		return nil, E
 	}
 	length := binary.BigEndian.Uint16(h1[1:])
 	buf1 := make([]byte, int(length))
-	n, err = io.ReadFull(conn, buf1)
-	if err != nil {
-		err1, ok := err.(*net.OpError)
-		if !ok {
-			return nil, E
-		} else if err1.Timeout() {
-			return nil, T
-		}
-	}
+	n, _ = io.ReadFull(conn, buf1)
 	if n == int(length) {
 		return buf1, h1[0]
 	} else {
@@ -133,15 +115,13 @@ func (self *RpcNode) wrapRecv(conn io.Reader) (msg []byte, t byte) {
 }
 
 //proxyLoop proxy between remote and local server/client,redirect/wrapsend messages
-func (self *RpcNode) proxyLoop(conn io.ReadWriteCloser) {
+func (self *RpcNode) proxyLoop(conn net.Conn) {
 	self.connS1, self.connS2 = net.Pipe()
 	self.connC1, self.connC2 = net.Pipe()
-	//self.Server = rpc.NewServer()
 	go func() {
-		self.Server.ServeConn(self.connS1)
-		//log.Println("end serve")
+		self.Server.ServeCodec(jsonrpc.NewServerCodec(self.connS1))
 	}()
-	self.Client = rpc.NewClient(self.connC1)
+	self.Client = jsonrpc.NewClient(self.connC1)
 	self.remote = conn
 	//loop next
 	go self.localToRemote(self.connC2, C)
@@ -150,58 +130,104 @@ func (self *RpcNode) proxyLoop(conn io.ReadWriteCloser) {
 }
 
 func (self *RpcNode) remoteToLocal() {
-	var bufremote = bufio.NewReader(self.remote)
-LOOP1:
+	var errCountS, errCountC int
+	var bufRemote = bufio.NewReader(self.remote)
+
 	for {
-		//self.remote.SetDeadline(time.Now().Add(time.Second * 90))
-		msg, t := self.wrapRecv(bufremote)
+		msg, t := self.wrapRecv(bufRemote)
 		switch t {
 		case S:
+			errCountS = 0
 			self.connC2.Write(msg)
-			//log.Printf("to C:%v\n", msg)
 		case C:
+			errCountC = 0
 			self.connS2.Write(msg)
-			//log.Printf("to S:%v\n", msg)
 		case E:
-			break LOOP1
-		case T:
-			//log.Println("timeout")
+			errCountS++
+			errCountC++
+			break
+		}
+		if errCountC > 30 || errCountS > 30 {
+			break
 		}
 	}
 	self.remote.Close()
-	//log.Println("remote disconnect")
+
+	err := errors.New("wrapRecv error")
+	go self.notifyException(err)
 }
 
 func (self *RpcNode) localToRemote(from io.ReadCloser, t byte) {
+	var n int
+	var err error
 	var buf = make([]byte, 512)
 	for {
-		n, _ := from.Read(buf)
+		n, err = from.Read(buf)
 		if n > 0 {
-			_, err := self.wrapSend(t, buf[:n], self.remote)
+			_, err = self.wrapSend(t, buf[:n], self.remote)
 			if err != nil {
-				//log.Printf("WrapSend:%v\n", err)
 				break
 			}
 		} else {
-			//log.Printf("local Read:%v\n", err)
 			break
 		}
 	}
 	from.Close()
-	//log.Printf("local disconnect: %c\n", t)
+	go self.notifyException(err)
 }
 
 //Dial connect to remote, and link local server/client,use after NewRpcNode
-func (self *RpcNode) Dial(addr string) error {
-	conn, err := net.Dial("tcp", addr)
+// @network		network name   tcp/tpc6/udp/udp6... dial.parseNetwork()
+// @address     host and port net.JoinHostPort()
+// @path     	http rpc url path
+// @isTLS       to support tls such https set this is true
+// @timeout		dial time out time
+func (self *RpcNode) Dial(network, address string, path string, isTLS bool, timeout time.Duration) error {
+
+	var err error
+	var conn net.Conn
+
+	netDialer := &net.Dialer{
+		Timeout:   20 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: true,
+	}
+
+	if isTLS {
+		conn, err = tls.DialWithDialer(netDialer, network, address, tlsConfig)
+	} else {
+		conn, err = net.DialTimeout(network, address, netDialer.Timeout)
+	}
+
 	if err != nil {
 		return err
 	}
-	self.proxyLoop(conn)
-	return nil
+
+	io.WriteString(conn, "CONNECT "+path+" HTTP/1.0\n\n")
+
+	// Require successful HTTP response
+	// before switching to RPC protocol.
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: "CONNECT"})
+	if err == nil && resp.Status == connected {
+		self.proxyLoop(conn)
+		return nil
+	}
+	if err == nil {
+		err = errors.New("unexpected HTTP response: " + resp.Status)
+	}
+	conn.Close()
+	return &net.OpError{
+		Op:   "dial-http",
+		Net:  network + " " + address,
+		Addr: nil,
+		Err:  err,
+	}
 }
 
-//Close close
+//Close to close all
 func (self *RpcNode) Close() {
 	self.Client.Close()
 	self.connC2.Close()
@@ -211,20 +237,26 @@ func (self *RpcNode) Close() {
 	self.remote.Close()
 }
 
-//Accept accept remote connection,and link local server/client
-func Accept(l net.Listener, provider interface{}) (*RpcNode, error) {
-	conn, err := l.Accept()
-	if err != nil {
-		return nil, err
-	}
-	node1 := NewRpcNode(provider)
+//AcceptConn accept remote connection,and link local server/client
+// @conn 	http Hijack
+// @name	rpc register name
+// @rcvr	rpc receiver's concrete type
+func AcceptConn(conn net.Conn, name string, rcvr interface{}) (*RpcNode, error) {
+	node1 := NewRpcNode(name, rcvr)
 	node1.proxyLoop(conn)
 	return node1, nil
 }
 
-//NewRpcNodeByConn connect to remote by io.ReadWriteCloser, and link local server/client,use after NewRpcNode
-func NewRpcNodeByConn(provider interface{}, conn io.ReadWriteCloser) *RpcNode {
-	node1 := NewRpcNode(provider)
-	node1.proxyLoop(conn)
-	return node1
+// notifyException call ErrFun when exception come in.
+func (self *RpcNode) notifyException(e error) {
+	for _, f := range self.ErrFunc {
+		try(f, self, e)
+	}
 }
+
+// Try tries to run a function and recovers from a panic
+func try(f func(s *RpcNode, e error), r *RpcNode, e error) {
+	defer func() { recover() }()
+	f(r, e)
+}
+
